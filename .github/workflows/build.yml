@@ -8,6 +8,8 @@ on:
       - main
       - build/tvos-topshelf
 
+# Fork CI is intentionally enabled for the Top Shelf validation branch.
+
 jobs:
   build:
     name: Build tvOS IPA with Top Shelf
