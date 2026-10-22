@@ -42,7 +42,7 @@
 				AA0000030000000000000001 /* Info.plist */,
 			);
 			name = BilibiliTopShelf;
-			path = ..;
+			path = .;
 			sourceTree = "<group>";
 		};
 		AA0000080000000000000001 /* Products */ = {
