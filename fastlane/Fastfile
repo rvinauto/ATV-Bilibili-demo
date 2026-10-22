@@ -1,3 +1,5 @@
+require "fileutils"
+
 default_platform(:tvos)
 
 platform :tvos do
@@ -77,7 +79,9 @@ platform :tvos do
     UI.user_error!("Unexpected Top Shelf extension point") unless ext_point == "com.apple.tv-top-shelf"
 
     sh("file", File.join(embedded_appex, "BilibiliTopShelf"))
-    sh("bash", "-lc", "cd #{Shellwords.escape(repo_root)} && /usr/bin/zip -qry BilbiliAtvDemo.ipa Payload")
+    Dir.chdir(repo_root) do
+      sh("/usr/bin/zip", "-qry", "BilbiliAtvDemo.ipa", "Payload")
+    end
     UI.user_error!("IPA was not produced: #{ipa_path}") unless File.file?(ipa_path)
 
     sh("ls", "-lh", ipa_path)
