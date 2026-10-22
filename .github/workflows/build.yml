@@ -1,51 +1,131 @@
 name: Build workflow
+
 on:
   pull_request:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
+      - build/tvos-topshelf
 
 jobs:
   build:
-    name: Build ipa
+    name: Build tvOS IPA with Top Shelf
     runs-on: macos-26
     permissions:
       contents: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - uses: maxim-lobanov/setup-xcode@v1
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: 'latest-stable'
-      - name: Build
+
+      - name: Show toolchain
         run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+          xcodebuild -showsdks
+
+      - name: Build unsigned BilibiliLive app
+        run: |
+          set -euo pipefail
           fastlane build_unsign_ipa
+
+      - name: Build unsigned Top Shelf extension
+        run: |
+          set -euo pipefail
+          TOP_PRODUCTS="$RUNNER_TEMP/topshelf-products"
+          TOP_INTERMEDIATES="$RUNNER_TEMP/topshelf-intermediates"
+
+          xcodebuild build \
+            -project BilibiliTopShelf/BilibiliTopShelf.xcodeproj \
+            -target BilibiliTopShelf \
+            -configuration Release \
+            -sdk appletvos \
+            -destination 'generic/platform=tvOS' \
+            SYMROOT="$TOP_PRODUCTS" \
+            OBJROOT="$TOP_INTERMEDIATES" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM=''
+
+          APPEX="$TOP_PRODUCTS/Release-appletvos/BilibiliTopShelf.appex"
+          if [[ ! -d "$APPEX" ]]; then
+            echo "Top Shelf extension not found at $APPEX"
+            find "$TOP_PRODUCTS" -maxdepth 4 -name '*.appex' -print || true
+            exit 1
+          fi
+
+          echo "APPEX_PATH=$APPEX" >> "$GITHUB_ENV"
+
+      - name: Embed Top Shelf extension into IPA
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/bilibili-ipa"
+          rm -rf "$WORK"
+          mkdir -p "$WORK"
+          unzip -q BilbiliAtvDemo.ipa -d "$WORK"
+
+          APP_PATH="$(find "$WORK/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [[ -z "$APP_PATH" ]]; then
+            echo "Main .app not found in IPA"
+            exit 1
+          fi
+
+          mkdir -p "$APP_PATH/PlugIns"
+          ditto "$APPEX_PATH" "$APP_PATH/PlugIns/BilibiliTopShelf.appex"
+
+          EXT_INFO="$APP_PATH/PlugIns/BilibiliTopShelf.appex/Info.plist"
+          MAIN_INFO="$APP_PATH/Info.plist"
+
+          echo "Main app platform:"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleSupportedPlatforms:0' "$MAIN_INFO"
+          /usr/libexec/PlistBuddy -c 'Print :DTPlatformName' "$MAIN_INFO"
+          /usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:0' "$MAIN_INFO"
+
+          echo "Top Shelf extension platform:"
+          EXT_PLATFORM="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleSupportedPlatforms:0' "$EXT_INFO")"
+          EXT_DT_PLATFORM="$(/usr/libexec/PlistBuddy -c 'Print :DTPlatformName' "$EXT_INFO")"
+          EXT_FAMILY="$(/usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:0' "$EXT_INFO")"
+          EXT_POINT="$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$EXT_INFO")"
+
+          echo "CFBundleSupportedPlatforms=$EXT_PLATFORM"
+          echo "DTPlatformName=$EXT_DT_PLATFORM"
+          echo "UIDeviceFamily=$EXT_FAMILY"
+          echo "NSExtensionPointIdentifier=$EXT_POINT"
+
+          [[ "$EXT_PLATFORM" == "AppleTVOS" ]]
+          [[ "$EXT_DT_PLATFORM" == "appletvos" ]]
+          [[ "$EXT_FAMILY" == "3" ]]
+          [[ "$EXT_POINT" == "com.apple.tv-top-shelf" ]]
+
+          file "$APP_PATH/PlugIns/BilibiliTopShelf.appex/BilibiliTopShelf"
+
+          rm -f BilbiliAtvDemo-TopShelf.ipa
+          (
+            cd "$WORK"
+            /usr/bin/zip -qry "$GITHUB_WORKSPACE/BilbiliAtvDemo-TopShelf.ipa" Payload
+          )
+          ls -lh BilbiliAtvDemo-TopShelf.ipa
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BilbiliAtvDemo.ipa
-          path: BilbiliAtvDemo.ipa
-
-      # - name: List, filter and delete artifacts
-      #   if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-      #   uses: actions/github-script@v6
-      #   id: artifact
-      #   with:
-      #     script: |
-      #       const { owner, repo } = context.issue
-            
-      #       const res = await github.rest.actions.listArtifactsForRepo({
-      #         owner,
-      #         repo,
-      #       })
-            
-      #       res.data.artifacts
-      #         .forEach(({ id }) => { github.rest.actions.deleteArtifact({ owner, repo, artifact_id: id, }) })
+          name: BilibiliLive-tvOS-TopShelf-${{ github.sha }}
+          path: BilbiliAtvDemo-TopShelf.ipa
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Delete GitHub release if exist then create release
         if: github.ref == 'refs/heads/main' && github.event_name == 'push' && github.event.repository.fork == false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mv BilbiliAtvDemo.ipa BilbiliAtvDemo-unsigned.ipa
+          mv BilbiliAtvDemo-TopShelf.ipa BilbiliAtvDemo-unsigned.ipa
           gh release view "nightly" && gh release delete "nightly" -y --cleanup-tag
           gh release create "nightly" BilbiliAtvDemo-unsigned.ipa -t "Nightly" -p
