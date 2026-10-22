@@ -27,6 +27,17 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             window.rootViewController = LoginViewController.create()
         }
         window.makeKeyAndVisible()
+
+        if let url = connectionOptions.urlContexts.first?.url {
+            DispatchQueue.main.async { [weak self] in
+                self?.handleDeepLink(url)
+            }
+        }
+    }
+
+    func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        guard let url = URLContexts.first?.url else { return }
+        handleDeepLink(url)
     }
 
     func showLogin() {
@@ -39,6 +50,45 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     func resetTabBar() {
         replaceRootViewController(with: BLTabBarViewController(), animated: true)
+    }
+
+    private func handleDeepLink(_ url: URL) {
+        guard url.scheme == "bilibili-live" else { return }
+
+        // bilibili-live://home only needs to foreground the app.
+        guard url.host == "video" else { return }
+        guard ApiRequest.isLogin() else { return }
+
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let queryItems = components?.queryItems ?? []
+        guard
+            let aidText = queryItems.first(where: { $0.name == "aid" })?.value,
+            let aid = Int(aidText),
+            aid > 0
+        else {
+            return
+        }
+
+        let cid = queryItems
+            .first(where: { $0.name == "cid" })
+            .flatMap(\.value)
+            .flatMap(Int.init)
+
+        let detail = VideoDetailViewController.create(aid: aid, cid: cid)
+        topViewController(from: window?.rootViewController)?.present(detail, animated: true)
+    }
+
+    private func topViewController(from root: UIViewController?) -> UIViewController? {
+        if let presented = root?.presentedViewController {
+            return topViewController(from: presented)
+        }
+        if let navigation = root as? UINavigationController {
+            return topViewController(from: navigation.visibleViewController)
+        }
+        if let tabBar = root as? UITabBarController {
+            return topViewController(from: tabBar.selectedViewController)
+        }
+        return root
     }
 
     private func replaceRootViewController(with viewController: UIViewController, animated: Bool) {
